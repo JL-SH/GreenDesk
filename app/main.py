@@ -5,26 +5,41 @@ from . import models, schemas
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(
-    title="GreenDesk API",
-    description="Sistema de gestión de inventario para prácticas profesionales",
-    version="0.1.0"
-)
+app = FastAPI(title="GreenDesk", version="1.0")
 
-@app.get("/devices/", response_model=list[schemas.DeviceOut])
-def read_devices(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)):
-    devices = db.query(models.Device).offset(skip).limit(limit).all()
-    return devices
+MODEL_MAP = {
+    "devices": models.Device,
+    "logs": models.AuditLog
+}
 
 @app.post("/devices/", response_model=schemas.DeviceOut, status_code=201)
 def create_device(device: schemas.DeviceCreate, db: Session = Depends(get_db)):
-    db_device = db.query(models.Device).filter(models.Device.serial_number == device.serial_number).first()
-    if db_device:
-        raise HTTPException(status_code=400, detail="Serial number already registered")
-    
     new_device = models.Device(**device.model_dump())
-    
     db.add(new_device)
     db.commit()
     db.refresh(new_device)
+
+    log = models.AuditLog(
+        target_model="Device",
+        target_id=new_device.id,
+        action="create",
+        changes={"new_state": device.model_dump()}
+    )
+    db.add(log)
+    db.commit()
+    
     return new_device
+
+@app.get("/generic/{model_name}/{item_id}")
+def get_any_model(model_name: str, item_id: int, db: Session = Depends(get_db)):
+    model_class = MODEL_MAP.get(model_name.lower())
+    
+    if not model_class:
+        raise HTTPException(status_code=404, detail="Modelo no registrado en la API genérica")
+
+    item = db.query(model_class).filter(model_class.id == item_id).first()
+    
+    if not item:
+        raise HTTPException(status_code=404, detail=f"No se encontró el item en {model_name}")
+        
+    return item
